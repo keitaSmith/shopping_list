@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
-
+import 'package:http/http.dart' as http;
 import 'package:shopping_list/models/grocery_item.dart';
 import 'package:shopping_list/widgets/new_item.dart';
+import 'dart:convert';
+import 'package:shopping_list/data/categories.dart';
 
 class GroceryList extends StatefulWidget {
   const GroceryList({super.key});
@@ -11,7 +13,52 @@ class GroceryList extends StatefulWidget {
 }
 
 class _GroceryListState extends State<GroceryList> {
-  final List<GroceryItem> _groceryItems = [];
+  List<GroceryItem> _groceryItems = [];
+  var _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadItems();
+  }
+
+  void _loadItems() async {
+    final url = Uri.https(
+      'shopping-list-app-6e61b-default-rtdb.firebaseio.com',
+      'shopping-list.json',
+    );
+    final response = await http.get(url);
+    if (response.body == 'null') {
+      //prevent infinite loading if response is null
+      setState(() {
+        _isLoading = false;
+      });
+      return;
+    }
+    final Map<String, dynamic> listData = json.decode(response.body);
+    final List<GroceryItem> loadedItems = [];
+    for (final item in listData.entries) {
+      final category =
+          categories.entries
+              .firstWhere(
+                (catItem) => catItem.value.title == item.value['category'],
+              )
+              .value;
+      loadedItems.add(
+        GroceryItem(
+          id: item.key,
+          name: item.value['name'],
+          quantity: item.value['quantity'],
+          category: category,
+        ),
+      );
+    }
+    setState(() {
+      _groceryItems = loadedItems;
+      _isLoading = false;
+    });
+  }
+
   void _addItem() async {
     final newItem = await Navigator.of(
       context,
@@ -25,6 +72,11 @@ class _GroceryListState extends State<GroceryList> {
   }
 
   void _removeItem(GroceryItem item) {
+    final url = Uri.https(
+      'shopping-list-app-6e61b-default-rtdb.firebaseio.com',
+      'shopping-list/${item.id}.json',
+    );
+    http.delete(url);
     setState(() {
       _groceryItems.remove(item);
     });
@@ -33,6 +85,11 @@ class _GroceryListState extends State<GroceryList> {
   @override
   Widget build(BuildContext context) {
     Widget content = const Center(child: Text("No items added yet."));
+
+    if (_isLoading) {
+      content = const Center(child: CircularProgressIndicator());
+    }
+
     if (_groceryItems.isNotEmpty) {
       content = ListView.builder(
         itemCount: _groceryItems.length,
@@ -41,10 +98,11 @@ class _GroceryListState extends State<GroceryList> {
               key: ValueKey(_groceryItems[index].id),
               direction: DismissDirection.horizontal,
               onDismissed: (direction) {
+                var isUndo = false;
                 final removedItem = _groceryItems[index];
 
                 setState(() {
-                  _removeItem(removedItem);
+                  _groceryItems.remove(removedItem);
                 });
 
                 ScaffoldMessenger.of(ctx).clearSnackBars();
@@ -55,6 +113,7 @@ class _GroceryListState extends State<GroceryList> {
                       label: 'Undo',
                       onPressed: () {
                         setState(() {
+                          isUndo = true;
                           _groceryItems.insert(index, removedItem);
                         });
                       },
@@ -62,6 +121,11 @@ class _GroceryListState extends State<GroceryList> {
                     duration: const Duration(seconds: 4),
                   ),
                 );
+                Future.delayed(const Duration(seconds: 4), () {
+                  if (!isUndo && context.mounted) {
+                    _removeItem(removedItem); // no await here
+                  }
+                });
               },
               background: Container(
                 color: Colors.red,
